@@ -55,7 +55,7 @@ public class AsynchronousEcho{
          // 为什么要创建一个socketChannel
          SocketChannel socketChannel = serverSocketChannel.accept();
          //将这个socket设置为非阻塞然后注册到selector中 并监听read事件
-        //关于register 第二个参数的理解 是 让这个channel处理读就绪的状态 等下次有数据来了之后就会从这个通道中读取数据
+        //关于register 第二个参数的理解 是 让这个channel处理读就绪的状态 等下次内核把这个链接的数据读取完毕之后 我们通过selector.select()方法就能
          socketChannel.configureBlocking(false)
                  .register(selector,SelectionKey.OP_READ);
          contexts.put(socketChannel,new Context());
@@ -71,19 +71,26 @@ public class AsynchronousEcho{
             //bytebuffer切换为读模式
             context.nioBuffer.flip();
             //currentLine的作用是什么？
+            //使用currentLine的目的是  防止nioBuffer一次写入过多 而导致(\r\t/quit)这个字符串分两次接送了而无法停止
             context.currentLine = context.currentLine + Charset.defaultCharset().decode(context.nioBuffer);
             if (QUIT.matcher(context.currentLine).find()) {
                 context.terminating = true;
             } else if (context.currentLine.length() > 16) {
+                //目的是为了节省资源 因为(\r\t/quit)最长也就八个字节
                 context.currentLine = context.currentLine.substring(8);
             }
-            //bytebuffer切换为写模式
+            //bytebuffer切换为读模式
             context.nioBuffer.flip();
+            //这一步就已经回写给了客户端
             int count = socketChannel.write(context.nioBuffer);
             if (count < context.nioBuffer.limit()) {
-                key.cancel();
+                //如果socketChannel一次并没有把context.nioBuffer读完 说明 系统缓存区满了
+                //那么需要将socketChannel设置去关心写事件 将niobuffer剩余的数据写完在关心读事件
+                key.cancel();  //这个方法应该是把这个selector和channel解绑
+                //然后重新绑定selector和这个channel 并关心写事件
                 socketChannel.register(key.selector(), SelectionKey.OP_WRITE);
             } else {
+                //切换成写模式 重置相关指针
                 context.nioBuffer.clear();
                 if (context.terminating) {
                     cleanup(socketChannel);
@@ -105,6 +112,7 @@ public class AsynchronousEcho{
         SocketChannel socketChannel = (SocketChannel) key.channel();
         Context context = contexts.get(socketChannel);
         try{
+            //剩余的字节
             int remainingBytes = context.nioBuffer.limit()- context.nioBuffer.position();
             int count = socketChannel.write(context.nioBuffer);
             if(count==remainingBytes) {
