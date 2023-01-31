@@ -109,6 +109,7 @@ public class AsynchronousEcho{
     }
 
     private static void continueEcho(Selector selector,SelectionKey key) throws IOException{
+        //如果这个方法被触发 说明当前的系统缓冲区有空余
         SocketChannel socketChannel = (SocketChannel) key.channel();
         Context context = contexts.get(socketChannel);
         try{
